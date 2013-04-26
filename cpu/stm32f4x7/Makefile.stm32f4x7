@@ -1,0 +1,233 @@
+
+.SUFFIXES:
+
+define \n
+
+
+endef
+
+
+### Define the CPU directory
+CONTIKI_CPU=$(CONTIKI)/cpu/stm32f4x7
+
+### Define the source files we have in this port
+
+CONTIKI_CPU_DIRS = . STM32F4xx_StdPeriph_Driver/inc STM32F4x7_ETH_Driver/inc CMSIS 
+CONTIKI_CPU_DIRS += STM32F4xx_StdPeriph_Driver/src/ STM32F4x7_ETH_Driver/src/
+
+ifdef ELF_LOADER
+ELFLOADER  = elfloader-arch.c symtab.c
+endif
+
+
+STM32F4X7_C = rtimer-arch.c clock.c uip_arch.c syscalls.c system_stm32f4xx.c stm32f4xx_it.c
+STM32F4X7_C += misc.c stm32f4xx_dma.c stm32f4xx_exti.c stm32f4xx_gpio.c stm32f4xx_syscfg.c stm32f4xx_rcc.c stm32f4xx_pwr.c stm32f4xx_rtc.c
+STM32F4X7_C += stm32f4x7_eth.c
+
+STM32F4X7_S = startup_stm32f4xx.s
+
+# .s and .s79 not specified here because in Makefile.include only .c and .S suffixes are replaced with .o.
+CONTIKI_TARGET_SOURCEFILES += $(STM32F4X7_C) \
+                              $(SYSAPPS) $(ELFLOADER) \
+                              $(TARGETLIBS)
+
+CONTIKI_SOURCEFILES        += $(CONTIKI_TARGET_SOURCEFILES)
+
+
+# GCC
+CC		= arm-none-eabi-gcc
+LD		= arm-none-eabi-gcc
+AS		= arm-none-eabi-gcc
+NM		= arm-none-eabi-nm
+AR		= arm-none-eabi-ar
+OBJCOPY	= arm-none-eabi-objcopy
+STRIP	= arm-none-eabi-strip
+SIZE	= arm-none-eabi-size
+
+
+ifndef DEBUG
+OPTI = -Os -ffunction-sections 
+endif
+
+# C defines
+CDEFS += -DHSE_VALUE=8000000UL
+CDEFS += -DUSE_STDPERIPH_DRIVER
+CDEFS += -DCORE_M4
+# enable parameter-checking in STM's library
+#CDEFS += -DUSE_FULL_ASSERT
+
+# Assembler defines
+ADEFS = -D__ASSEMBLY__ -DSTM32F4XX
+
+
+#-mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=softfp
+#  -g*:          generate debugging information
+#  -O*:          optimization level
+#  -f...:        tuning, see GCC manual and avr-libc documentation
+#  -Wall...:     warning level
+#  -Wa,...:      tell GCC to pass this to the assembler.
+#    -adhlns...: create assembler listing
+#
+# Flags for C and C++ (arm-elf-gcc/arm-elf-g++)
+CFLAGS +=  -mthumb -g
+CFLAGS += $(OPTI)
+CFLAGS += -mcpu=cortex-m4 -mthumb-interwork 
+CFLAGS += -mfpu=fpv4-sp-d16 -mfloat-abi=softfp
+CFLAGS += $(CDEFS)
+CFLAGS += $(patsubst %,-I%,$(EXTRAINCDIRS)) -I.
+CFLAGS += -mlong-calls
+CFLAGS += -fdata-sections
+CFLAGS += -fpromote-loop-indices
+CFLAGS += -Wall -Wextra
+CFLAGS += -Wcast-align -Wpointer-arith
+CFLAGS += -Wredundant-decls -Wshadow -Wcast-qual -Wcast-align
+CFLAGS += -Wno-cast-qual
+
+
+ASFLAGS  = -mthumb -mcpu=cortex-m4 -c -mthumb-interwork -I. -x assembler-with-cpp
+ASFLAGS += $(ADEFS)
+#ASFLAGS += -Wa,-adhlns=$(addprefix $(OBJECTDIR)/, $(notdir $(addsuffix .lst, $(basename $<))))
+ASFLAGS += -Wa,-g
+ASFLAGS += $(patsubst %,-I%,$(EXTRAINCDIRS))
+
+
+LDFLAGS = -Wl,-Map=contiki-$(TARGET).map,--cref,--gc-sections
+LDFLAGS += -mcpu=cortex-m4 -mthumb
+#not in CPP
+#LDFLAGS += -nostartfiles
+LDFLAGS += $(patsubst %,-L%,$(EXTRA_LIBDIRS))
+LDFLAGS += $(patsubst %,-l%,$(EXTRA_LIBS)) 
+LDFLAGS +=-T$(CONTIKI_CPU)/stm32f4xxxg_flash.ld
+
+#LDFLAGS += -lc
+#LDFLAGS += -lm
+#LDFLAGS += -lgcc
+TARGET_LIBFILES = -lc
+
+	    
+ifndef ELF_LOADER
+ # Do not use garbage collection when the elfloader is used.
+ LDFLAGS += -Wl,--gc-sections
+endif 
+ 
+SIZEFLAGS = -A
+OBJOPTS = -O binary
+
+OBJOPTS_HEX = -O ihex
+
+
+
+ifdef COFFEE_ADDRESS
+ COFFEE = 1
+endif
+
+# Default values for coffee section start.
+ifndef COFFEE_ADDRESS
+ COFFEE_ADDRESS = 0x8010c00
+endif
+
+ifeq ($(COFFEE),1)
+ CONTIKI_TARGET_SOURCEFILES += cfs-coffee.c cfs-coffee-arch.c
+ CFLAGS += -DCOFFEE_ADDRESS=$(COFFEE_ADDRESS)
+ 
+ #If $make invokation passed starting address use phony target to force synchronization of source to .coffeefiles section
+ #Warning: recompilation will not be forced if the starting address is then dropped, with dire consequences:
+ # -->Source that uses COFFEE_FILES and read macros for conditional compilation will be left hanging!
+ # -->Object modules that used .coffeefiles will overlap the .data section.
+ # -->$make clean is safest.
+#ifeq ($(origin COFFEE_ADDRESS), command line)
+# ifeq ($(COFFEE_FILES), 2)      #safest to force recompilation even if eeprom address is changed, might have been switched from flash
+   .PHONY : coffee
+   coffee:
+   $(OBJECTDIR)/cfs-coffee-arch.o    : coffee      #cfs-coffee-arch uses COFFEE_FILES, COFFEE_ADDRESS
+   $(OBJECTDIR)/cfs-coffee.o         : coffee      #core routine requires recompilation
+
+else
+ # Coffee starts at the end of the flash, before NVM section.
+ COFFEE_ADDRESS = 0x801F800
+endif
+
+
+ifndef IAR
+
+#LDFLAGS+= -Wl,--section-start=.coffee=$(COFFEE_ADDRESS)
+
+else #IAR
+
+ ifeq ($(COFFEE),1)
+  LDFLAGS+= --config $(CONTIKI_CPU)/iar-cfg-coffee.icf
+ endif
+ 
+endif
+		
+
+### Custom rules
+
+OBJECTDIR = obj_$(TARGET)
+
+ssubst = ${patsubst %.s,%.o,${patsubst %.s79,%.o,$(1)}}
+
+CONTIKI_OBJECTFILES += ${addprefix $(OBJECTDIR)/,${call ssubst, $(STM32F4X7_S)}}
+
+vpath %.s $(CONTIKI_CPU)
+
+
+#CUSTOM_RULE_C_TO_CE = 1
+#%.ce: %.c
+#	$(CC) $(CFLAGS) -fno-merge-constants -fno-function-sections -DAUTOSTART_ENABLE -c $< -o $@
+#	$(STRIP) --strip-unneeded -g -x $@
+
+CUSTOM_RULE_LINK = 1
+
+ifdef CORE
+ifeq ($(wildcard $(CORE)),)
+ ${error $(CORE) doesn't exist}
+endif
+.PHONY: symbols.c symbols.h
+symbols.c:
+	$(NM) $(CORE) | awk -f $(CONTIKI)/tools/mknmlist > symbols.c	
+else
+symbols.c symbols.h:
+	cp ${CONTIKI}/tools/empty-symbols.c symbols.c
+	cp ${CONTIKI}/tools/empty-symbols.h symbols.h
+endif
+
+%.$(TARGET): %.co $(PROJECT_OBJECTFILES) $(PROJECT_LIBRARIES) contiki-$(TARGET).a # $(OBJECTDIR)/symbols.o
+	@echo LINKING $@
+	$(LD) $(LDFLAGS) $(TARGET_STARTFILES) ${filter-out %.a,$^} ${filter %.a,$^} $(TARGET_LIBFILES) $(filter %.a,$^) -o $@
+	@echo >> contiki-$(TARGET).map
+	@$(SIZE) $(SIZEFLAGS) $@ >> contiki-$(TARGET).map
+
+
+MOTELIST = $(CONTIKI)/tools/stm32w/motelist-linux
+
+MOTES = $(shell $(MOTELIST) 2>&- | awk '{print $$2}' | grep '\/')
+
+motelist: stm-motelist
+
+stm-motelist:
+	$(MOTELIST)
+stm-motes:
+	@echo $(MOTES)
+
+$(OBJECTDIR)/%.o: %.s79
+	$(AS) $(ASFLAGS) -o $@ $<
+	
+$(OBJECTDIR)/%.o: %.s
+	$(AS) $(ASFLAGS) -o $@ $<	
+	
+%.bin: %.$(TARGET)
+	$(OBJCOPY) $(OBJOPTS) $< $@ 
+
+%.hex: %.$(TARGET)
+	$(OBJCOPY) $(OBJOPTS_HEX) $< $@ 
+
+
+
+ifdef MOTE
+login:
+	$(SERIALDUMP) -b115200 -d10000 $(USBDEVPREFIX)$(word $(MOTE), $(MOTES))
+else
+login:
+	$(SERIALDUMP) -b115200 -d10000 $(USBDEVPREFIX)$(firstword $(MOTES))
+endif
